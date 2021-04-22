@@ -19,7 +19,7 @@
 
 # ### from audio_preprocessing_example.ipynb
 
-# In[8]:
+# In[69]:
 
 
 import os
@@ -108,7 +108,7 @@ for n in range(configuration_dict.get('number_of_samples', 3)):
 
 # ### from https://pytorch.org/tutorials/beginner/audio_preprocessing_tutorial.html
 
-# In[22]:
+# In[70]:
 
 
 #@title Prepare data and utility functions. {display-mode: "form"}
@@ -499,16 +499,136 @@ for mp3_file in itertools.islice(glob.iglob('data/numbers/*.mp3', recursive=True
 
 # ### We will start by initializing Allegro Trains to track everything we do:
 
-# In[ ]:
+# In[45]:
 
 
 from clearml import Task
-task.close()
+# task.close()
 task = Task.init(project_name="zoe", task_name="classification de nombres - task")
-configuration_dict = {'number_of_epochs': 6, 'batch_size': 8, 
-                      'dropout': 0.25, 'base_lr': 0.005, 
-                      'number_of_mel_filters': 64, 'resample_freq': 22050}
+configuration_dict = {'number_of_epochs': 10, 'batch_size': 1, 'dropout': 0.25, 'base_lr': 0.001}
 configuration_dict = task.connect(configuration_dict)
+
+
+# ### dataset object
+
+# In[46]:
+
+
+import PIL
+import io
+
+import pandas as pd
+import numpy as np
+from pathlib2 import Path
+import matplotlib.pyplot as plt
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
+from torch.utils.data import Dataset
+from torch.utils.tensorboard import SummaryWriter
+
+import torchaudio
+from torchvision.transforms import ToTensor
+
+from clearml import Task
+
+get_ipython().run_line_magic('matplotlib', 'inline')
+
+
+# In[50]:
+
+
+class KM_SoundDataset(Dataset):
+    def __init__(self, csv_path, file_path, folderList, resample_freq=0):
+        self.file_path = file_path
+        self.file_names = []
+        self.labels = []
+        self.folders = []
+#         self.n_mels = configuration_dict.get(number_of_mel_filters, 64)
+        self.resample = resample_freq
+        
+        #loop through the csv files and only add those from the folder list
+        csvData = pd.read_csv(csv_path)
+        for i in range(0,len(csvData)):
+            if csvData.iloc[i, 1] in folderList:
+                self.file_names.append(csvData.iloc[i, 0])
+                self.labels.append(csvData.iloc[i, 2])
+                self.folders.append(csvData.iloc[i, 1])
+        
+    def __getitem__(self, index):
+        #format the file path and load the file
+#         path = self.file_path / ("fold" + str(self.folders[index])) / self.file_names[index]
+        path = self.file_names[index]
+        sound, sample_rate = torchaudio.load(path, out = None, normalization = True)
+
+        # UrbanSound8K uses two channels, this will convert them to one
+        soundData = torch.mean(sound, dim=0, keepdim=True)
+        
+        #Make sure all files are the same size
+        if soundData.numel() < 160000:
+            fixedsize_data = torch.nn.functional.pad(soundData, (0, 160000 - soundData.numel()))
+        else:
+            fixedsize_data = soundData[0,:160000].reshape(1,160000)
+        
+        #downsample the audio
+        downsample_data = fixedsize_data[::5]
+        
+        melspectogram_transform = torchaudio.transforms.MelSpectrogram(sample_rate=sample_rate)
+        melspectogram = melspectogram_transform(downsample_data)
+        melspectogram_db = torchaudio.transforms.AmplitudeToDB()(melspectogram)
+
+        return fixedsize_data, sample_rate, melspectogram_db, self.labels[index]
+    
+    def __len__(self):
+        return len(self.file_names)
+
+                
+
+
+# In[51]:
+
+
+import glob
+from pathlib import Path
+
+def create_metadata_file(folder):
+    index_file=0
+    dict_metadata_mp3 = {}
+    for mp3_file in glob.iglob(folder+'/*.mp3', recursive=True):
+        dict_metadata_mp3[index_file]=[mp3_file, Path(mp3_file).stem, Path(mp3_file).stem, Path(mp3_file).stem]
+        index_file+=1
+    pd_metadata_mp3 = pd.DataFrame.from_dict(dict_metadata_mp3, orient='index', columns=['slice_file_name', 'fold', 'classID', 'class'])
+    audio_folder = Path(folder)
+    metadata_folder = audio_folder.parent / 'metadata'
+    pd_metadata_mp3.to_csv(str(metadata_folder)+'/numbers.csv')
+        
+create_metadata_file('data/numbers/audio')  
+
+
+# ![image-2.png](attachment:image-2.png)
+
+# In[52]:
+
+
+path_to_numbers = './data/numbers'
+
+csv_path = Path(path_to_numbers) / 'metadata' / 'numbers.csv'
+file_path = Path(path_to_numbers) / 'audio'
+
+train_set = KM_SoundDataset(csv_path, file_path, range(1,10))
+test_set = KM_SoundDataset(csv_path, file_path, [10])
+print("Train set size: " + str(len(train_set)))
+print("Test set size: " + str(len(test_set)))
+
+train_loader = torch.utils.data.DataLoader(train_set, batch_size = configuration_dict.get('batch_size', 4), 
+                                           shuffle = True, pin_memory=True, num_workers=1)
+test_loader = torch.utils.data.DataLoader(test_set, batch_size = configuration_dict.get('batch_size', 4), 
+                                          shuffle = False, pin_memory=True, num_workers=1)
+
+classes = ('0', '1', '2', '3', '4', '5', 
+           '6', '7', '8', '9', '10')
 
 
 # In[ ]:

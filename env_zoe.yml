@@ -3,4 +3,12 @@ channels:
   - defaults
 dependencies:
   - python=3.8
+  - torchaudio
+  - jupyter
+  - matplotlib
+  - tensorboard
+  - yapf
+  - librosa
+  - boto3
+  - pandas
 prefix: /home/explore/miniconda3/envs/zoe

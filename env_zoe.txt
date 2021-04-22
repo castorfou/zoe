@@ -5,6 +5,8 @@ conda install matplotlib  tensorboard
 pip install clearml
 conda install yapf
 conda install -c conda-forge librosa boto3
+conda install pandas
+conda install -c pytorch torchvision
 
 sudo add-apt-repository ppa:audio-recorder/ppa
 sudo apt install audio-recorder
