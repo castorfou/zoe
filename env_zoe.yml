@@ -1,0 +1,6 @@
+name: zoe
+channels:
+  - defaults
+dependencies:
+  - python=3.8
+prefix: /home/explore/miniconda3/envs/zoe

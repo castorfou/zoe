@@ -1,0 +1,10 @@
+conda create --name zoe python=3.8
+conda install -c pytorch torchaudio
+conda install jupyter
+conda install matplotlib  tensorboard
+pip install clearml
+conda install yapf
+conda install -c conda-forge librosa boto3
+
+sudo add-apt-repository ppa:audio-recorder/ppa
+sudo apt install audio-recorder
