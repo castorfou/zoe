@@ -499,7 +499,7 @@ for mp3_file in itertools.islice(glob.iglob('data/numbers/*.mp3', recursive=True
 
 # ### We will start by initializing Allegro Trains to track everything we do:
 
-# In[45]:
+# In[3]:
 
 
 from clearml import Task
@@ -511,7 +511,7 @@ configuration_dict = task.connect(configuration_dict)
 
 # ### dataset object
 
-# In[46]:
+# In[4]:
 
 
 import PIL
@@ -537,16 +537,17 @@ from clearml import Task
 get_ipython().run_line_magic('matplotlib', 'inline')
 
 
-# In[50]:
+# In[29]:
 
 
 class KM_SoundDataset(Dataset):
-    def __init__(self, csv_path, file_path, folderList, resample_freq=0):
+    def __init__(self, csv_path, file_path, folderList, resample_freq=0, return_audio=False):
         self.file_path = file_path
         self.file_names = []
         self.labels = []
         self.folders = []
-#         self.n_mels = configuration_dict.get(number_of_mel_filters, 64)
+        self.n_mels = configuration_dict.get('number_of_mel_filters', 64)
+        self.return_audio = return_audio
         self.resample = resample_freq
         
         #loop through the csv files and only add those from the folder list
@@ -563,31 +564,36 @@ class KM_SoundDataset(Dataset):
         path = self.file_names[index]
         sound, sample_rate = torchaudio.load(path, out = None, normalization = True)
 
-        # UrbanSound8K uses two channels, this will convert them to one
-        soundData = torch.mean(sound, dim=0, keepdim=True)
-        
-        #Make sure all files are the same size
-        if soundData.numel() < 160000:
-            fixedsize_data = torch.nn.functional.pad(soundData, (0, 160000 - soundData.numel()))
-        else:
-            fixedsize_data = soundData[0,:160000].reshape(1,160000)
-        
-        #downsample the audio
-        downsample_data = fixedsize_data[::5]
-        
-        melspectogram_transform = torchaudio.transforms.MelSpectrogram(sample_rate=sample_rate)
-        melspectogram = melspectogram_transform(downsample_data)
-        melspectogram_db = torchaudio.transforms.AmplitudeToDB()(melspectogram)
+        if self.resample > 0:
+            resample_transform = torchaudio.transforms.Resample(
+              orig_freq=sample_rate, new_freq=self.resample)
+            soundData = resample_transform(soundData)
 
-        return fixedsize_data, sample_rate, melspectogram_db, self.labels[index]
+        # This will convert audio files with two channels into one
+        soundData = torch.mean(soundData, dim=0, keepdim=True)
+
+        # Convert audio to log-scale Mel spectrogram
+        melspectrogram_transform = torchaudio.transforms.MelSpectrogram(
+            sample_rate=self.resample, n_mels=self.n_mels)
+        melspectrogram = melspectrogram_transform(soundData)
+        melspectogram_db = torchaudio.transforms.AmplitudeToDB()(melspectrogram)
+
+        #Make sure all spectrograms are the same size
+        fixed_length = 3 * (self.resample//200)
+        if melspectogram_db.shape[2] < fixed_length:
+            melspectogram_db = torch.nn.functional.pad(
+              melspectogram_db, (0, fixed_length - melspectogram_db.shape[2]))
+        else:
+            melspectogram_db = melspectogram_db[:, :, :fixed_length]
+
+        return soundData, self.resample, melspectogram_db, self.labels[index]
     
     def __len__(self):
         return len(self.file_names)
-
                 
 
 
-# In[51]:
+# In[30]:
 
 
 import glob
@@ -609,26 +615,165 @@ create_metadata_file('data/numbers/audio')
 
 # ![image-2.png](attachment:image-2.png)
 
-# In[52]:
+# In[31]:
 
 
-path_to_numbers = './data/numbers'
 
-csv_path = Path(path_to_numbers) / 'metadata' / 'numbers.csv'
-file_path = Path(path_to_numbers) / 'audio'
+path_to_SoundDataset_csv = Path('data') / 'numbers' / 'metadata' / 'numbers.csv'
+path_to_SoundDataset_audio = Path('data') / 'numbers' /  'audio'
 
-train_set = KM_SoundDataset(csv_path, file_path, range(1,10))
-test_set = KM_SoundDataset(csv_path, file_path, [10])
+
+# In[34]:
+
+
+train_set = KM_SoundDataset(path_to_SoundDataset_csv, path_to_SoundDataset_audio, range(1,5), 
+                              resample_freq=configuration_dict.get('resample_freq', 0), return_audio=False)
+test_set = KM_SoundDataset(path_to_SoundDataset_csv, path_to_SoundDataset_audio, [5], 
+                             resample_freq=configuration_dict.get('resample_freq', 0), return_audio=True)
 print("Train set size: " + str(len(train_set)))
 print("Test set size: " + str(len(test_set)))
 
 train_loader = torch.utils.data.DataLoader(train_set, batch_size = configuration_dict.get('batch_size', 4), 
                                            shuffle = True, pin_memory=True, num_workers=1)
 test_loader = torch.utils.data.DataLoader(test_set, batch_size = configuration_dict.get('batch_size', 4), 
-                                          shuffle = False, pin_memory=True, num_workers=1)
+                                          shuffle = False, pin_memory=False, num_workers=1)
 
-classes = ('0', '1', '2', '3', '4', '5', 
-           '6', '7', '8', '9', '10')
+classes = (0,1,2,3,4,5,6,7,8,9,10)
+
+
+# In[10]:
+
+
+import torchvision.models as models
+
+model = models.resnet18(pretrained=True)
+model.conv1=nn.Conv2d(1, model.conv1.out_channels, 
+                      kernel_size=model.conv1.kernel_size[0], 
+                      stride=model.conv1.stride[0], 
+                      padding=model.conv1.padding[0])
+num_ftrs = model.fc.in_features
+model.fc = nn.Linear(num_ftrs, 10)
+
+
+# In[11]:
+
+
+optimizer = optim.SGD(model.parameters(), lr = configuration_dict.get('base_lr', 0.001), momentum = 0.9)
+scheduler = optim.lr_scheduler.StepLR(optimizer, step_size = configuration_dict.get('number_of_epochs')//3, gamma = 0.1)
+criterion = nn.CrossEntropyLoss()
+
+
+# In[12]:
+
+
+device = torch.cuda.current_device() if torch.cuda.is_available() else torch.device('cpu')
+print('Device to use: {}'.format(device))
+model.to(device)
+
+
+# In[13]:
+
+
+tensorboard_writer = SummaryWriter('./tensorboard_logs')
+
+
+# In[14]:
+
+
+def plot_signal(signal, title, cmap=None):
+    fig = plt.figure()
+    if signal.ndim == 1:
+        plt.plot(signal)
+    else:
+        plt.imshow(signal, cmap=cmap)    
+    plt.title(title)
+    
+    plot_buf = io.BytesIO()
+    plt.savefig(plot_buf, format='jpeg')
+    plot_buf.seek(0)
+    plt.close(fig)
+    return ToTensor()(PIL.Image.open(plot_buf))
+
+
+# In[15]:
+
+
+def train(model, epoch):
+    model.train()
+    for batch_idx, (sounds, sample_rate, inputs, labels) in enumerate(train_loader):
+        inputs = inputs.to(device)
+        labels = labels.to(device)
+
+        # zero the parameter gradients
+        optimizer.zero_grad()
+
+        # forward + backward + optimize
+        outputs = model(inputs)
+        _, predicted = torch.max(outputs, 1)
+        loss = criterion(outputs, labels)
+        loss.backward()
+        optimizer.step()
+        
+        iteration = epoch * len(train_loader) + batch_idx
+        if batch_idx % log_interval == 0: #print training stats
+            print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'
+                  .format(epoch, batch_idx * len(inputs), len(train_loader.dataset), 
+                          100. * batch_idx / len(train_loader), loss))
+            tensorboard_writer.add_scalar('training loss/loss', loss, iteration)
+            tensorboard_writer.add_scalar('learning rate/lr', optimizer.param_groups[0]['lr'], iteration)
+                
+        
+        if batch_idx % debug_interval == 0:    # report debug image every "debug_interval" mini-batches
+            for n, (inp, pred, label) in enumerate(zip(inputs, predicted, labels)):
+                series = 'label_{}_pred_{}'.format(classes[label.cpu()], classes[pred.cpu()])
+                tensorboard_writer.add_image('Train MelSpectrogram samples/{}_{}_{}'.format(batch_idx, n, series), 
+                                             plot_signal(inp.cpu().numpy().squeeze(), series, 'hot'), iteration)
+
+
+# In[16]:
+
+
+def test(model, epoch):
+    model.eval()
+    class_correct = list(0. for i in range(10))
+    class_total = list(0. for i in range(10))
+    with torch.no_grad():
+        for idx, (sounds, sample_rate, inputs, labels) in enumerate(test_loader):
+            inputs = inputs.to(device)
+            labels = labels.to(device)
+
+            outputs = model(inputs)
+
+            _, predicted = torch.max(outputs, 1)
+            c = (predicted == labels)
+            for i in range(len(inputs)):
+                label = labels[i].item()
+                class_correct[label] += c[i].item()
+                class_total[label] += 1
+        
+            iteration = (epoch + 1) * len(train_loader)
+            if idx % debug_interval == 0:    # report debug image every "debug_interval" mini-batches
+                for n, (sound, inp, pred, label) in enumerate(zip(sounds, inputs, predicted, labels)):
+                    series = 'label_{}_pred_{}'.format(classes[label.cpu()], classes[pred.cpu()])
+                    tensorboard_writer.add_audio('Test audio samples/{}_{}_{}'.format(idx, n, series), 
+                                                 sound, iteration, int(sample_rate[n]))
+                    tensorboard_writer.add_image('Test MelSpectrogram samples/{}_{}_{}'.format(idx, n, series), 
+                                                 plot_signal(inp.cpu().numpy().squeeze(), series, 'hot'), iteration)
+
+    total_accuracy = 100 * sum(class_correct)/sum(class_total)
+    print('[Iteration {}] Accuracy on the {} test images: {}%\n'.format(epoch, sum(class_total), total_accuracy))
+    tensorboard_writer.add_scalar('accuracy/total', total_accuracy, iteration)
+
+
+# In[17]:
+
+
+log_interval = 10
+debug_interval = 25
+for epoch in range(configuration_dict.get('number_of_epochs', 10)):
+    train(model, epoch)
+    test(model, epoch)
+    scheduler.step()
 
 
 # In[ ]:

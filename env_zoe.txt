@@ -7,6 +7,8 @@ conda install yapf
 conda install -c conda-forge librosa boto3
 conda install pandas
 conda install -c pytorch torchvision
+pip install pydub
+pip install Js2Py
 
 sudo add-apt-repository ppa:audio-recorder/ppa
 sudo apt install audio-recorder
