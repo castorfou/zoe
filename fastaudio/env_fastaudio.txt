@@ -1,0 +1,7 @@
+conda create --name fastaudio python=3.8
+conda activate fastaudio
+
+pip install fastaudio
+pip install git+https://github.com/fastaudio/fastaudio.git
+
+conda install jupyter
