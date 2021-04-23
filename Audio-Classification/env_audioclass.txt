@@ -1,0 +1,5 @@
+conda create --name audioclass  python=3.7
+conda activate audioclass
+
+pip install -r requirements.txt
+
